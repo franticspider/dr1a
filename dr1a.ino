@@ -129,11 +129,11 @@ uint8_t rnd()
   
   
 uint32_t ticksperbeat=25000;  
+uint16_t onmillis=10000;
 uint64_t nticks=0;
 uint64_t eticks=0;
 
 
-uint16_t onmillis=10000;
 uint8_t envelopeBitShift;
 bool makenoise = false;
 bool bdbeat = false;
@@ -162,12 +162,11 @@ static int protothreadEnvelope(struct pt *pt)
 {
 
   static unsigned long m1=0;
-  static const int shiftticks=onmillis*0.125;
-
-
+  
   PT_BEGIN(pt);
-  PT_WAIT_UNTIL(pt, eticks > shiftticks);
-  envelopeBitShift = envelopeBitShift<8 ? envelopeBitShift +1 : 8;
+  //increase the bitshift every 1/8 of a noteon
+  PT_WAIT_UNTIL(pt, eticks > (onmillis*0.125));
+  envelopeBitShift = envelopeBitShift < 8 ? envelopeBitShift + 1 : 8;
   eticks=0;
   
   PT_END(pt);
@@ -233,13 +232,13 @@ void loop()
       break;
       
       
-    case 1:
+    case 1://TODO: Here we are mixing the waveSelect with the tempo calc - not ideal!
       waveSelect = (ws + (adcVal >> 7)) & 0x07;             // gives us 0-7
       wave1 = waves[waveSelect >> 1];                       // 0-3
       wave2 = waves[(waveSelect >> 1) + (waveSelect & 1)];  // 0-4
       
-       //ticksperbeat = ;
-       ticksperbeat = 40000-((uint32_t) adcVal * 45);//60);//((uint32_t) adcVal*1050);
+      //TODO: need some maths to figure out this range instead of guessing!
+      ticksperbeat = 40000-((uint32_t) adcVal * 55);//60);//((uint32_t) adcVal*1050);
       break;
 
       
