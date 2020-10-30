@@ -19,6 +19,10 @@
  * Questions/queries can be directed to info@wonkystuff.net
  */
 
+#include <pt.h>
+static struct pt protoThreadB; //Beat 
+static struct pt protoThreadE; //Envelope 
+
 #include "calc.h"
 #define NUM_ADCS (4)
 #define RESET_ACTIVE (1)  // we're programming via Arduino, so the reset better be active!
@@ -30,10 +34,14 @@
 // enable ADC, start conversion, prescaler = /64 gives us an ADC clock of 8MHz/64 (125kHz)
 #define ADCSRAVAL ( _BV(ADEN) | _BV(ADSC) | _BV(ADPS2) | _BV(ADPS1)  | _BV(ADIE) )
 
+//////////////////////////////////////////////////////////////////////////////
 // Remember(!) the input clock is 64MHz, therefore all rates
 // are relative to that.
 // let the preprocessor calculate the various register values 'coz
 // they don't change after compile time
+
+//SRATE is defined in 'calc.h' and is 50,000 
+//so the division == 160 - so the first set of definitions will matter
 #if ((F_TIM/(SRATE)) < 255)
 #define T1_MATCH ((F_TIM/(SRATE))-1)
 #define T1_PRESCALE _BV(CS00)  //prescaler clk/1 (i.e. 8MHz)
@@ -100,6 +108,10 @@ void setup()
 
   pi = 1;
   pi_sync = 1;
+
+  
+  PT_INIT(&protoThreadB);
+  PT_INIT(&protoThreadE);
 }
 
 
@@ -113,6 +125,58 @@ uint8_t rnd()
   return r;
 }
 
+  
+  
+  
+uint32_t ticksperbeat=25000;  
+uint64_t nticks=0;
+uint64_t eticks=0;
+
+
+uint16_t onmillis=10000;
+uint8_t envelopeBitShift;
+bool makenoise = false;
+bool bdbeat = false;
+/* protothread for keeping da beat
+ *   
+ */
+static int protothreadBeat(struct pt *pt)
+{
+
+  static unsigned long m1=0;
+
+  PT_BEGIN(pt);//nticks is incremented in ISR()
+  makenoise = true;
+  PT_WAIT_UNTIL(pt, nticks >= onmillis);
+  makenoise = false;
+  PT_WAIT_UNTIL(pt, nticks >= ticksperbeat);
+  envelopeBitShift = 0;
+  nticks = 0;
+  bdbeat = !bdbeat;
+  
+  PT_END(pt);
+}
+
+
+static int protothreadEnvelope(struct pt *pt)
+{
+
+  static unsigned long m1=0;
+  static const int shiftticks=onmillis*0.125;
+
+
+  PT_BEGIN(pt);
+  PT_WAIT_UNTIL(pt, eticks > shiftticks);
+  envelopeBitShift = envelopeBitShift<8 ? envelopeBitShift +1 : 8;
+  eticks=0;
+  
+  PT_END(pt);
+}
+
+
+
+
+
 // There are no real time constraints here, this is an idle loop after
 // all...
 void loop()
@@ -123,18 +187,25 @@ void loop()
   static uint8_t  perturb = 0;
   static uint8_t  ws=0;
 
+
+  protothreadBeat(&protoThreadB);
+  protothreadEnvelope(&protoThreadE);
+
+  //Each go round the loop we check a different pot
   switch(adcNum)
   {
-    case 0:  // ADC 0 is on physical pin 1
+    // BPM
+    case 0:
       // The reset pin is active here, we only have half of the range
-      if (adcVal < 512)
-      {
-          adcVal = 512;
-      }
+      //if (adcVal < 512)
+      //{
+      //    adcVal = 512;
+      //}
       adcVal -= 512;        // now we have 0-511
       adcVal = adcVal >> 1; // move into 8 bits 0-255
 
-      // Perturb the main waveform randomly, but with a degree
+
+      /*// Perturb the main waveform randomly, but with a degree
       // of control
       if (adcVal > 16)      // give us a bit of a dead zone
       {
@@ -150,62 +221,97 @@ void loop()
       else
       {
         ws=0; // reset the wave-perturbation so that the weveform-select is sane again…
+      }*/
+      
+      perturb = rnd();
+      if (perturb < adcVal)
+      {
+        ws = perturb;
       }
+
+      onmillis = 9500 - (adcVal * 40);//was 10000 - 
       break;
+      
+      
     case 1:
       waveSelect = (ws + (adcVal >> 7)) & 0x07;             // gives us 0-7
       wave1 = waves[waveSelect >> 1];                       // 0-3
       wave2 = waves[(waveSelect >> 1) + (waveSelect & 1)];  // 0-4
+      
+       //ticksperbeat = ;
+       ticksperbeat = 40000-((uint32_t) adcVal * 45);//60);//((uint32_t) adcVal*1050);
       break;
+
+      
     case 2:
       pi_sync = pgm_read_word(&octaveLookup[adcVal]);
       break;
+
+ 
     case 3:
       pi = pgm_read_word(&octaveLookup[adcVal]);
       break;
+ 
   }
-
+  
   // next time we're dealing with a different channel; calculate which one:
   adcNum++;
   adcNum %= NUM_ADCS;
-
+  
   // Start the ADC off again, this time for the next oscillator
   // it turns out that simply setting the MUX to the ADC number (0-3)
   // will select that channel, as long as you don't want to set any other bits
   // in ADMUX of course. Still, that's simple to do if you need to.
   ADMUX  = adcNum;      // select the correct channel for the next conversion
   ADCSRA |= _BV(ADSC);  // ADCSRAVAL;
+  
 }
+
+
+
+
 
 // deal with oscillator
 ISR(TIM0_COMPA_vect)
 {
-  // increment the phase counter
-  phase += pi;
 
-  uint16_t old_sync = phase_sync;
-  phase_sync += pi_sync;
-  if (phase_sync < old_sync)
-  {
-    // Sub oscillator output
-    PORTB ^= 1;
-    phase = 0;
-  }
+  nticks++;
+  eticks++;
+  
+    // increment the phase counter
+    phase += pi;
+  
+    uint16_t old_sync = phase_sync;
+    phase_sync += pi_sync;
+    if (phase_sync < old_sync)
+    {
+      // Sub oscillator output
+      PORTB ^= 1;
+      phase = 0;
+    }
+  
+    // By shifting the 16 bit number by 6, we are left with a number
+    // in the range 0-1023 (0-0x3ff)
+    uint16_t p = (phase) >> FRACBITS;
+  
+    // look up the output-value based on the current phase counter (truncated)
+  
+    // to save wavetable space, we play the wavetable forward (first half),
+    // then backwards (and inverted)
+    uint16_t ix = p < WTSIZE ? p : ((2*WTSIZE-1) - p);
+  
+    uint8_t s1 = pgm_read_byte(&wave1[ix]);
+    uint8_t s2 = pgm_read_byte(&wave2[ix]);
+    uint8_t s = s1 + s2;
 
-  // By shifting the 16 bit number by 6, we are left with a number
-  // in the range 0-1023 (0-0x3ff)
-  uint16_t p = (phase) >> FRACBITS;
+    if(!bdbeat)s = s + (rnd() >> 2);
 
-  // look up the output-value based on the current phase counter (truncated)
+    //if(!makenoise)s=0;
 
-  // to save wavetable space, we play the wavetable forward (first half),
-  // then backwards (and inverted)
-  uint16_t ix = p < WTSIZE ? p : ((2*WTSIZE-1) - p);
-
-  uint8_t s1 = pgm_read_byte(&wave1[ix]);
-  uint8_t s2 = pgm_read_byte(&wave2[ix]);
-  uint8_t s = s1 + s2;
-
-  // invert the wave for the second half
-  OSCOUTREG = p < WTSIZE ? -s : s;
+    //TODO: this is where we can bitshift to get an envelope...    
+    s = s >> envelopeBitShift;
+  
+    // invert the wave for the second half
+    OSCOUTREG = p < WTSIZE ? -s : s;
+  
 }

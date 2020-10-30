@@ -21,7 +21,7 @@
  *
  * Questions/queries can be directed to info@wonkystuff.net
  */
-#include "arduino.h"
+//#include "arduino.h"
 #define SRATE    (50000L)
 #define WTSIZE   (512L)
 #define FRACBITS (6L)
@@ -32,4 +32,3 @@ extern const uint8_t  sine[WTSIZE];
 extern const uint8_t  ramp[WTSIZE];
 extern const uint8_t  sq[WTSIZE];
 extern const uint8_t  triangle[WTSIZE];
-
